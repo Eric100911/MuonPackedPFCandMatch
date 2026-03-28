@@ -1,3 +1,8 @@
+/**
+ * \file MuonPackedCandMatchNtuplizer.cc
+ * \brief Implementation of the standalone MiniAOD muon-to-packed-candidate study analyzer.
+ */
+
 #include "../interface/MuonPackedCandMatchNtuplizer.h"
 
 #include <algorithm>
@@ -37,6 +42,7 @@ struct PointerSummary {
   std::set<int> pfMatches;
 };
 
+/// Candidate row retained for the `MuonCandMatch` tree after any match view or pointer resolves.
 struct LocalCandidateStudy {
   int packedIndex = kInvalidInt;
   int pointerMatchAny = 0;
@@ -46,6 +52,7 @@ struct LocalCandidateStudy {
   MuonPackedCandMatchNtuplizer::MatchMetrics metrics;
 };
 
+/// Debug-only ranking payload used for unmatched soft-muon printouts.
 struct DebugCandidateRank {
   int packedIndex = kInvalidInt;
   double rawMomentumChi2 = std::numeric_limits<double>::infinity();
@@ -192,7 +199,11 @@ void MuonPackedCandMatchNtuplizer::endJob() {}
 
 void MuonPackedCandMatchNtuplizer::bookTrees() {
   edm::Service<TFileService> fs;
+
+  // Event-level tree: one entry per event with jagged PV and muon content.
   eventTree_ = fs->make<TTree>("Events", "Muon to packed-candidate matching study");
+
+  // Candidate-level tree: one entry per retained `(event, muon, packed candidate)` row.
   candidateTree_ = fs->make<TTree>("MuonCandMatch", "Retained muon-candidate comparison rows");
 
   eventTree_->Branch("run", &run_, "run/i");
@@ -558,6 +569,7 @@ MuonPackedCandMatchNtuplizer::extractPackedTrackKinematics(const pat::PackedCand
 void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::EventSetup &) {
   clearEventBranches();
 
+  // Load event products and choose the PV used for selected-PV observables.
   edm::Handle<edm::View<pat::Muon>> muons;
   edm::Handle<edm::View<pat::PackedCandidate>> packedCands;
   edm::Handle<reco::VertexCollection> vertices;
@@ -578,6 +590,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
           ? &vertices->at(selectedPVIndex_)
           : nullptr;
 
+  // Store either the full PV collection or only the selected PV, depending on configuration.
   if (vertices.isValid()) {
     if (storeAllPrimaryVertices_) {
       for (size_t i = 0; i < vertices->size(); ++i) {
@@ -610,6 +623,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
   }
   nPV_ = static_cast<int>(pv_x_.size());
 
+  // The legacy comparator consumes candidates sequentially, so keep a shared availability list.
   std::vector<int> legacyAvailable;
   legacyAvailable.reserve(packedCands->size());
   for (size_t i = 0; i < packedCands->size(); ++i) {
@@ -679,11 +693,14 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     int bestDzAssocIdx = kInvalidInt;
     double bestDzAssocValue = std::numeric_limits<double>::infinity();
 
+    // Compare this muon with every packed candidate under all matching views.
     for (size_t packedIdx = 0; packedIdx < packedCands->size(); ++packedIdx) {
       const auto &cand = packedCands->at(packedIdx);
 
       int pointerMatchSource = 0;
       int pointerMatchPfRef = 0;
+      // Resolve PAT pointer diagnostics before metric-based comparisons so the same
+      // retained row can record both pointer and kinematic information.
       if (storePointerDiagnostics_) {
         const auto packedPtr = packedCands->ptrAt(packedIdx);
         for (size_t srcIdx = 0; srcIdx < muon.numberOfSourceCandidatePtrs(); ++srcIdx) {
@@ -729,6 +746,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         debugRanks.push_back(rank);
       }
 
+      // Reproduce the legacy first-match box comparator currently used in MultiLepPAT.
       if (muMomentum > 0. && muon.track().isNonnull() && legacyChargePass &&
           std::abs(cand.px() - muon.px()) < legacyBoxThreshold_ * muMomentum &&
           std::abs(cand.py() - muon.py()) < legacyBoxThreshold_ * muMomentum &&
@@ -808,6 +826,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         }
       }
 
+      // Keep rows that pass at least one metric view or resolve via PAT pointers.
       if (metrics.legacyBoxPass || metrics.vectorPass || metrics.chi2Pass || metrics.dzPvPass ||
           metrics.dzAssocPass || pointerMatchSource || pointerMatchPfRef) {
         LocalCandidateStudy study;
@@ -829,6 +848,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       pointerSummary.firstPointerPackedIdx = *pointerSummary.allMatches.begin();
     }
 
+    // Optional stdout dump for soft muons that have no pointer-based resolution.
     if (debugSoftMuon && pointerSummary.pointerResolvedCount == 0) {
       const auto debugLess = [](const DebugCandidateRank &lhs, const DebugCandidateRank &rhs) {
         const bool lhsValidChi2 = std::isfinite(lhs.rawMomentumChi2);
@@ -973,6 +993,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       }
     }
 
+    // Final legacy assignment is sequential and consumes candidates globally across muons.
     int legacyWinnerIdx = kInvalidInt;
     if (muon.track().isNonnull()) {
       for (auto availIt = legacyAvailable.begin(); availIt != legacyAvailable.end(); ++availIt) {
@@ -990,6 +1011,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       }
     }
 
+    // Fill the muon summary row in the event-level tree.
     mu_index_.push_back(static_cast<int>(muIdx));
     mu_passSelection_.push_back(passSelection ? 1 : 0);
     mu_charge_.push_back(muon.charge());
@@ -1041,6 +1063,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     mu_nPassDzAssoc_.push_back(nPassDzAssoc);
     ++nMuStored_;
 
+    // Fill one candidate-tree row for each retained `(muon, packed candidate)` comparison.
     for (const auto &retained : retainedRows) {
       const auto &cand = packedCands->at(retained.packedIndex);
       cand_run_ = run_;
@@ -1116,6 +1139,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     }
   }
 
+  // The event tree is filled once after all muons have populated their jagged payload.
   eventTree_->Fill();
 }
 

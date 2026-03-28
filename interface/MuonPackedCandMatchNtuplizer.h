@@ -1,3 +1,8 @@
+/**
+ * \file MuonPackedCandMatchNtuplizer.h
+ * \brief Declaration of the standalone MiniAOD muon-to-packed-candidate study analyzer.
+ */
+
 #ifndef HeavyFlavorAnalysis_TPSMuonPackedMatch_MuonPackedCandMatchNtuplizer_h
 #define HeavyFlavorAnalysis_TPSMuonPackedMatch_MuonPackedCandMatchNtuplizer_h
 
@@ -19,8 +24,17 @@
 
 class TTree;
 
+/**
+ * \class MuonPackedCandMatchNtuplizer
+ * \brief Studies how MiniAOD muons can be associated with packed PF candidates.
+ *
+ * The analyzer writes one event-level tree and one retained `(muon, packed candidate)`
+ * tree so legacy, metric-based, and pointer-based matching views can be compared
+ * without modifying the production TPS-Onia2MuMu analyzer.
+ */
 class MuonPackedCandMatchNtuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources> {
 public:
+  /// Track observables and propagated momentum uncertainties used by the match metrics.
   struct TrackKinematicsWithErrors {
     float pt = -9999.f;
     float eta = -9999.f;
@@ -39,6 +53,7 @@ public:
     bool hasTrackErrors = false;
   };
 
+  /// Per-candidate comparison metrics stored in the retained-row tree.
   struct MatchMetrics {
     float deltaPRelVec = -9999.f;
     int legacyBoxPass = 0;
@@ -61,15 +76,24 @@ private:
   void analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup) override;
   void endJob() override;
 
+  /// Book the event-level and retained-row TTrees.
   void bookTrees();
+  /// Reset per-event branch buffers before processing a new event.
   void clearEventBranches();
+  /// Select the PV used for selected-PV observables and dz/dxy comparisons.
   int selectPrimaryVertexIndex(const reco::VertexCollection &vertices) const;
+  /// Compute the scalar sum of squared track transverse momenta for a vertex.
   double vertexSumPt2(const reco::Vertex &vertex) const;
+  /// Prefer muon.track() and fall back to muon.muonBestTrack() when available.
   TrackKinematicsWithErrors extractMuonTrackKinematics(const pat::Muon &muon, int &trackSource) const;
+  /// Extract pseudoTrack-based observables for packed candidates with track details.
   TrackKinematicsWithErrors extractPackedTrackKinematics(const pat::PackedCandidate &cand) const;
+  /// Copy reco::Track observables and uncertainties into the ntuple-friendly struct.
   TrackKinematicsWithErrors extractTrackKinematics(const reco::Track &track) const;
+  /// Propagate the track covariance from (q/p, lambda, phi) to Cartesian momentum errors.
   void propagateCartesianMomentumErrors(const reco::Track &track, float &pxErr, float &pyErr, float &pzErr) const;
 
+  // Consumes tokens and input tags configured from the Python cfg.
   edm::EDGetTokenT<edm::View<pat::Muon>> muonToken_;
   edm::EDGetTokenT<edm::View<pat::PackedCandidate>> packedToken_;
   edm::EDGetTokenT<reco::VertexCollection> primaryVertexToken_;
@@ -78,6 +102,7 @@ private:
   edm::InputTag packedTag_;
   edm::InputTag primaryVertexTag_;
 
+  // Runtime switches and thresholds controlling the matching study.
   bool studyAllMuons_;
   std::string muonSelectionStr_;
   StringCutObjectSelector<pat::Muon> muonSelector_;
@@ -92,9 +117,11 @@ private:
   bool storePointerDiagnostics_;
   bool debugUnmatchedSoftMuons_;
 
+  // TFileService products written by the analyzer.
   TTree *eventTree_;
   TTree *candidateTree_;
 
+  // Event identifiers and summary counters.
   UInt_t run_;
   UInt_t lumi_;
   ULong64_t event_;
@@ -103,6 +130,7 @@ private:
   Int_t nSlimmedMuons_;
   Int_t nMuStored_;
 
+  // Primary-vertex payload stored in the event tree.
   std::vector<float> pv_x_;
   std::vector<float> pv_y_;
   std::vector<float> pv_z_;
@@ -115,6 +143,7 @@ private:
   std::vector<int> pv_nTracks_;
   std::vector<int> pv_isValid_;
 
+  // Muon-level event-tree payload: kinematics, IDs, pointer diagnostics, and match summaries.
   std::vector<int> mu_index_;
   std::vector<int> mu_passSelection_;
   std::vector<int> mu_charge_;
@@ -165,6 +194,7 @@ private:
   std::vector<int> mu_nPassDzPv_;
   std::vector<int> mu_nPassDzAssoc_;
 
+  // Candidate-tree payload for the current retained `(event, muon, packed candidate)` row.
   UInt_t cand_run_;
   UInt_t cand_lumi_;
   ULong64_t cand_event_;

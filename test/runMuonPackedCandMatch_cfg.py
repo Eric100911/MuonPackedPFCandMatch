@@ -1,13 +1,18 @@
-###############################################################################
-# runMuonPackedCandMatch_cfg.py - CMSSW config for the muon-packedCandidate
-# matching study ntuplizer.
-###############################################################################
+"""Run the MuonPackedCandMatchNtuplizer on MiniAOD inputs.
+
+This cfg selects the GlobalTag from `runOnMC` and `era`, exposes the main
+matching-study switches through VarParsing, and writes the ntuple with
+TFileService.
+"""
 
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 
+# --- Command-line arguments exposed to cmsRun ---
 ivars = VarParsing.VarParsing('analysis')
 
+# These options control dataset interpretation, event filtering, and optional
+# debug printouts without changing the analyzer source.
 ivars.register(
     'runOnMC',
     default=False,
@@ -44,12 +49,14 @@ ivars.register(
     info='Print stdout debug for SoftCutBasedId muons with zero pointer matches'
 )
 
+# --- Default input/output values for local testing ---
 ivars.inputFiles = ('/store/data/Run2023D/ParkingDoubleMuonLowMass0/MINIAOD/PromptReco-v1/000/369/873/00000/33e0e861-ddbc-4afe-a76b-31be5057dff1.root',)
 ivars.outputFile = 'muonPackedCandMatch.root'
 # Note: VarParsing('analysis') may append tags such as _numEvent1 to the
 # final ROOT file name when command-line overrides are used.
 ivars.era = 'Run2023D'
 
+# --- Era-to-GlobalTag lookup for data and MC ---
 globalTagDict = {
     'data': {
         'Run2022C': '124X_dataRun3_PromptAnalysis_v1',
@@ -82,6 +89,7 @@ globalTagDict = {
     }
 }
 
+# --- Parse and validate runtime arguments ---
 ivars.parseArguments()
 
 if ivars.runOnMC and ivars.era not in globalTagDict['MC']:
@@ -89,8 +97,10 @@ if ivars.runOnMC and ivars.era not in globalTagDict['MC']:
 if not ivars.runOnMC and ivars.era not in globalTagDict['data']:
     raise ValueError(f"Invalid data era '{ivars.era}'. Available options: {list(globalTagDict['data'].keys())}")
 
+# --- Core CMSSW process setup ---
 process = cms.Process('MUONMATCH')
 
+# --- Standard services and detector conditions ---
 process.load('FWCore.MessageService.MessageLogger_cfi')
 process.MessageLogger.cerr.FwkReport.reportEvery = 100
 process.load('Configuration.StandardSequences.GeometryRecoDB_cff')
@@ -100,12 +110,14 @@ process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 
 from Configuration.AlCa.GlobalTag import GlobalTag
 
+# Select the GlobalTag from the validated era table instead of hardcoding it in the analyzer cfg.
 if ivars.runOnMC:
     myGlobalTag = globalTagDict['MC'][ivars.era]
 else:
     myGlobalTag = globalTagDict['data'][ivars.era]
 process.GlobalTag = GlobalTag(process.GlobalTag, myGlobalTag, '')
 
+# --- Input source and optional event-range filtering ---
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(ivars.maxEvents))
 process.source = cms.Source(
     'PoolSource',
@@ -115,11 +127,16 @@ process.source = cms.Source(
 if ivars.eventRange != '':
     process.source.eventRange = cms.untracked.VEventRange(ivars.eventRange)
 
+# --- Matching-study analyzer configuration ---
 process.muonPackedCandMatch = cms.EDAnalyzer(
     'MuonPackedCandMatchNtuplizer',
+
+    # MiniAOD collections studied by the standalone validation analyzer.
     muons=cms.untracked.InputTag('slimmedMuons'),
     packedCandidates=cms.untracked.InputTag('packedPFCandidates'),
     primaryVertices=cms.untracked.InputTag('offlineSlimmedPrimaryVertices'),
+
+    # Runtime selection and matching thresholds mirrored in the technical docs.
     studyAllMuons=cms.untracked.bool(ivars.studyAllMuons),
     MuonSelection=cms.untracked.string('pt > 2.5 && abs(eta) < 2.4'),
     PVSelectionMode=cms.untracked.string('firstVertex'),
@@ -134,10 +151,12 @@ process.muonPackedCandMatch = cms.EDAnalyzer(
     DebugUnmatchedSoftMuons=cms.untracked.bool(ivars.debugUnmatchedSoftMuons),
 )
 
+# --- ROOT output ---
 process.TFileService = cms.Service(
     'TFileService',
     fileName=cms.string(ivars.outputFile),
 )
 
+# --- Schedule ---
 process.p = cms.Path(process.muonPackedCandMatch)
 process.schedule = cms.Schedule(process.p)
