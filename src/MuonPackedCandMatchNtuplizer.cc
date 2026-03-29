@@ -3,7 +3,7 @@
  * \brief Implementation of the standalone MiniAOD muon-to-packed-candidate study analyzer.
  */
 
-#include "../interface/MuonPackedCandMatchNtuplizer.h"
+#include "HeavyFlavorAnalysis/MuonPackedPFCandMatch/interface/MuonPackedCandMatchNtuplizer.h"
 
 #include <algorithm>
 #include <cmath>
