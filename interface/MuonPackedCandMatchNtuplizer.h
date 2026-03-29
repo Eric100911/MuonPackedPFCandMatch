@@ -28,9 +28,9 @@ class TTree;
  * \class MuonPackedCandMatchNtuplizer
  * \brief Studies how MiniAOD muons can be associated with packed PF candidates.
  *
- * The analyzer writes one event-level tree and one retained `(muon, packed candidate)`
- * tree so legacy, metric-based, and pointer-based matching views can be compared
- * without modifying the production TPS-Onia2MuMu analyzer.
+ * The analyzer writes one event-level tree for all studied muons and one retained
+ * `(muon, packed candidate)` tree for disagreement cases so metric-based and
+ * pointer-based matching views can be compared without modifying TPS-Onia2MuMu.
  */
 class MuonPackedCandMatchNtuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources> {
 public:
@@ -56,7 +56,6 @@ public:
   /// Per-candidate comparison metrics stored in the retained-row tree.
   struct MatchMetrics {
     float deltaPRelVec = -9999.f;
-    int legacyBoxPass = 0;
     float chi2MomentumDiag = -9999.f;
     float deltaDzSelectedPV = -9999.f;
     float deltaDzAssocPV = -9999.f;
@@ -107,7 +106,6 @@ private:
   std::string muonSelectionStr_;
   StringCutObjectSelector<pat::Muon> muonSelector_;
   std::string pvSelectionMode_;
-  double legacyBoxThreshold_;
   double vectorRelPThreshold_;
   double momentumChi2Threshold_;
   double momentumDzPvChi2Threshold_;
@@ -115,6 +113,9 @@ private:
   bool requireChargeMatch_;
   bool storeAllPrimaryVertices_;
   bool storePointerDiagnostics_;
+  bool storeDetailedRowsOnlyOnDisagreement_;
+  int loserRowsPerMethod_;
+  std::string disagreementRowMode_;
   bool debugUnmatchedSoftMuons_;
 
   // TFileService products written by the analyzer.
@@ -127,6 +128,7 @@ private:
   ULong64_t event_;
   Int_t selectedPVIndex_;
   Int_t nPV_;
+  Int_t nPVStored_;
   Int_t nSlimmedMuons_;
   Int_t nMuStored_;
 
@@ -182,13 +184,25 @@ private:
   std::vector<int> mu_sourceCandidateResolvedCount_;
   std::vector<int> mu_pointerResolvedCount_;
   std::vector<int> mu_pointerMultiplicityAnomaly_;
-  std::vector<int> mu_matchLegacyPackedIdx_;
+  std::vector<int> mu_nMethodsConsidered_;
+  std::vector<int> mu_nMethodsMatched_;
+  std::vector<int> mu_nDistinctMatchedPackedIdx_;
+  std::vector<int> mu_hasAnyMethodMatch_;
+  std::vector<int> mu_isAgreementOnMatch_;
+  std::vector<int> mu_isAgreementOnMismatch_;
+  std::vector<int> mu_hasMethodDisagreement_;
+  std::vector<int> mu_nPackedPassingAnyKinematic_;
+  std::vector<int> mu_nPackedPointerResolved_;
+  std::vector<int> mu_nPackedPassingAnyCriterion_;
+  std::vector<float> mu_bestVectorRelP_;
+  std::vector<float> mu_bestMomentumChi2_;
+  std::vector<float> mu_bestMomentumDzPvChi2_;
+  std::vector<float> mu_bestMomentumDzAssocChi2_;
   std::vector<int> mu_matchVectorPackedIdx_;
   std::vector<int> mu_matchChi2PackedIdx_;
   std::vector<int> mu_matchDzPvPackedIdx_;
   std::vector<int> mu_matchDzAssocPackedIdx_;
   std::vector<int> mu_matchPointerPackedIdx_;
-  std::vector<int> mu_nPassLegacyBox_;
   std::vector<int> mu_nPassVector_;
   std::vector<int> mu_nPassChi2_;
   std::vector<int> mu_nPassDzPv_;
@@ -250,12 +264,10 @@ private:
   Float_t cand_deltaDzAssocPV_;
   Float_t cand_chi2MomentumDzSelectedPV_;
   Float_t cand_chi2MomentumDzAssocPV_;
-  Int_t cand_legacyBoxPass_;
   Int_t cand_vectorPass_;
   Int_t cand_chi2Pass_;
   Int_t cand_dzPvPass_;
   Int_t cand_dzAssocPass_;
-  Int_t cand_finalLegacy_;
   Int_t cand_finalVector_;
   Int_t cand_finalChi2_;
   Int_t cand_finalDzPv_;

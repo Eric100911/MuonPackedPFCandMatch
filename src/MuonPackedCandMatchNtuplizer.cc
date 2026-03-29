@@ -42,7 +42,7 @@ struct PointerSummary {
   std::set<int> pfMatches;
 };
 
-/// Candidate row retained for the `MuonCandMatch` tree after any match view or pointer resolves.
+/// Candidate row retained for the `MuonCandMatch` tree after any surviving match view or pointer resolves.
 struct LocalCandidateStudy {
   int packedIndex = kInvalidInt;
   int pointerMatchAny = 0;
@@ -103,7 +103,6 @@ MuonPackedCandMatchNtuplizer::MuonPackedCandMatchNtuplizer(const edm::ParameterS
                                                                    "pt > 2.5 && abs(eta) < 2.4")),
       muonSelector_(muonSelectionStr_),
       pvSelectionMode_(iConfig.getUntrackedParameter<std::string>("PVSelectionMode", "firstVertex")),
-      legacyBoxThreshold_(iConfig.getUntrackedParameter<double>("LegacyBoxThreshold", 0.5)),
       vectorRelPThreshold_(iConfig.getUntrackedParameter<double>("VectorRelPThreshold", 0.01)),
       momentumChi2Threshold_(iConfig.getUntrackedParameter<double>("MomentumChi2Threshold", 25.0)),
       momentumDzPvChi2Threshold_(iConfig.getUntrackedParameter<double>("MomentumDzPvChi2Threshold", 25.0)),
@@ -112,6 +111,11 @@ MuonPackedCandMatchNtuplizer::MuonPackedCandMatchNtuplizer(const edm::ParameterS
       requireChargeMatch_(iConfig.getUntrackedParameter<bool>("RequireChargeMatch", true)),
       storeAllPrimaryVertices_(iConfig.getUntrackedParameter<bool>("StoreAllPrimaryVertices", true)),
       storePointerDiagnostics_(iConfig.getUntrackedParameter<bool>("StorePointerDiagnostics", true)),
+      storeDetailedRowsOnlyOnDisagreement_(
+          iConfig.getUntrackedParameter<bool>("StoreDetailedRowsOnlyOnDisagreement", true)),
+      loserRowsPerMethod_(std::max(0, iConfig.getUntrackedParameter<int>("LoserRowsPerMethod", 3))),
+      disagreementRowMode_(
+          iConfig.getUntrackedParameter<std::string>("DisagreementRowMode", "winnersPlusPerMethodLosers")),
       debugUnmatchedSoftMuons_(iConfig.getUntrackedParameter<bool>("DebugUnmatchedSoftMuons", false)),
       eventTree_(nullptr),
       candidateTree_(nullptr),
@@ -120,6 +124,7 @@ MuonPackedCandMatchNtuplizer::MuonPackedCandMatchNtuplizer(const edm::ParameterS
       event_(0),
       selectedPVIndex_(kInvalidInt),
       nPV_(0),
+      nPVStored_(0),
       nSlimmedMuons_(0),
       nMuStored_(0),
       cand_run_(0),
@@ -176,12 +181,10 @@ MuonPackedCandMatchNtuplizer::MuonPackedCandMatchNtuplizer(const edm::ParameterS
       cand_deltaDzAssocPV_(kInvalidFloat),
       cand_chi2MomentumDzSelectedPV_(kInvalidFloat),
       cand_chi2MomentumDzAssocPV_(kInvalidFloat),
-      cand_legacyBoxPass_(0),
       cand_vectorPass_(0),
       cand_chi2Pass_(0),
       cand_dzPvPass_(0),
       cand_dzAssocPass_(0),
-      cand_finalLegacy_(0),
       cand_finalVector_(0),
       cand_finalChi2_(0),
       cand_finalDzPv_(0),
@@ -211,6 +214,7 @@ void MuonPackedCandMatchNtuplizer::bookTrees() {
   eventTree_->Branch("event", &event_, "event/l");
   eventTree_->Branch("selectedPVIndex", &selectedPVIndex_, "selectedPVIndex/I");
   eventTree_->Branch("nPV", &nPV_, "nPV/I");
+  eventTree_->Branch("nPVStored", &nPVStored_, "nPVStored/I");
   eventTree_->Branch("nSlimmedMuons", &nSlimmedMuons_, "nSlimmedMuons/I");
   eventTree_->Branch("nMuStored", &nMuStored_, "nMuStored/I");
   eventTree_->Branch("pv_x", &pv_x_);
@@ -262,13 +266,25 @@ void MuonPackedCandMatchNtuplizer::bookTrees() {
   eventTree_->Branch("mu_sourceCandidateResolvedCount", &mu_sourceCandidateResolvedCount_);
   eventTree_->Branch("mu_pointerResolvedCount", &mu_pointerResolvedCount_);
   eventTree_->Branch("mu_pointerMultiplicityAnomaly", &mu_pointerMultiplicityAnomaly_);
-  eventTree_->Branch("mu_matchLegacyPackedIdx", &mu_matchLegacyPackedIdx_);
+  eventTree_->Branch("mu_nMethodsConsidered", &mu_nMethodsConsidered_);
+  eventTree_->Branch("mu_nMethodsMatched", &mu_nMethodsMatched_);
+  eventTree_->Branch("mu_nDistinctMatchedPackedIdx", &mu_nDistinctMatchedPackedIdx_);
+  eventTree_->Branch("mu_hasAnyMethodMatch", &mu_hasAnyMethodMatch_);
+  eventTree_->Branch("mu_isAgreementOnMatch", &mu_isAgreementOnMatch_);
+  eventTree_->Branch("mu_isAgreementOnMismatch", &mu_isAgreementOnMismatch_);
+  eventTree_->Branch("mu_hasMethodDisagreement", &mu_hasMethodDisagreement_);
+  eventTree_->Branch("mu_nPackedPassingAnyKinematic", &mu_nPackedPassingAnyKinematic_);
+  eventTree_->Branch("mu_nPackedPointerResolved", &mu_nPackedPointerResolved_);
+  eventTree_->Branch("mu_nPackedPassingAnyCriterion", &mu_nPackedPassingAnyCriterion_);
+  eventTree_->Branch("mu_bestVectorRelP", &mu_bestVectorRelP_);
+  eventTree_->Branch("mu_bestMomentumChi2", &mu_bestMomentumChi2_);
+  eventTree_->Branch("mu_bestMomentumDzPvChi2", &mu_bestMomentumDzPvChi2_);
+  eventTree_->Branch("mu_bestMomentumDzAssocChi2", &mu_bestMomentumDzAssocChi2_);
   eventTree_->Branch("mu_matchVectorPackedIdx", &mu_matchVectorPackedIdx_);
   eventTree_->Branch("mu_matchChi2PackedIdx", &mu_matchChi2PackedIdx_);
   eventTree_->Branch("mu_matchDzPvPackedIdx", &mu_matchDzPvPackedIdx_);
   eventTree_->Branch("mu_matchDzAssocPackedIdx", &mu_matchDzAssocPackedIdx_);
   eventTree_->Branch("mu_matchPointerPackedIdx", &mu_matchPointerPackedIdx_);
-  eventTree_->Branch("mu_nPassLegacyBox", &mu_nPassLegacyBox_);
   eventTree_->Branch("mu_nPassVector", &mu_nPassVector_);
   eventTree_->Branch("mu_nPassChi2", &mu_nPassChi2_);
   eventTree_->Branch("mu_nPassDzPv", &mu_nPassDzPv_);
@@ -330,12 +346,10 @@ void MuonPackedCandMatchNtuplizer::bookTrees() {
                          "chi2MomentumDzSelectedPV/F");
   candidateTree_->Branch("chi2MomentumDzAssocPV", &cand_chi2MomentumDzAssocPV_,
                          "chi2MomentumDzAssocPV/F");
-  candidateTree_->Branch("legacyBoxPass", &cand_legacyBoxPass_, "legacyBoxPass/I");
   candidateTree_->Branch("vectorPass", &cand_vectorPass_, "vectorPass/I");
   candidateTree_->Branch("chi2Pass", &cand_chi2Pass_, "chi2Pass/I");
   candidateTree_->Branch("dzPvPass", &cand_dzPvPass_, "dzPvPass/I");
   candidateTree_->Branch("dzAssocPass", &cand_dzAssocPass_, "dzAssocPass/I");
-  candidateTree_->Branch("finalLegacy", &cand_finalLegacy_, "finalLegacy/I");
   candidateTree_->Branch("finalVector", &cand_finalVector_, "finalVector/I");
   candidateTree_->Branch("finalChi2", &cand_finalChi2_, "finalChi2/I");
   candidateTree_->Branch("finalDzPv", &cand_finalDzPv_, "finalDzPv/I");
@@ -349,6 +363,7 @@ void MuonPackedCandMatchNtuplizer::bookTrees() {
 void MuonPackedCandMatchNtuplizer::clearEventBranches() {
   selectedPVIndex_ = kInvalidInt;
   nPV_ = 0;
+  nPVStored_ = 0;
   nSlimmedMuons_ = 0;
   nMuStored_ = 0;
 
@@ -402,13 +417,25 @@ void MuonPackedCandMatchNtuplizer::clearEventBranches() {
   mu_sourceCandidateResolvedCount_.clear();
   mu_pointerResolvedCount_.clear();
   mu_pointerMultiplicityAnomaly_.clear();
-  mu_matchLegacyPackedIdx_.clear();
+  mu_nMethodsConsidered_.clear();
+  mu_nMethodsMatched_.clear();
+  mu_nDistinctMatchedPackedIdx_.clear();
+  mu_hasAnyMethodMatch_.clear();
+  mu_isAgreementOnMatch_.clear();
+  mu_isAgreementOnMismatch_.clear();
+  mu_hasMethodDisagreement_.clear();
+  mu_nPackedPassingAnyKinematic_.clear();
+  mu_nPackedPointerResolved_.clear();
+  mu_nPackedPassingAnyCriterion_.clear();
+  mu_bestVectorRelP_.clear();
+  mu_bestMomentumChi2_.clear();
+  mu_bestMomentumDzPvChi2_.clear();
+  mu_bestMomentumDzAssocChi2_.clear();
   mu_matchVectorPackedIdx_.clear();
   mu_matchChi2PackedIdx_.clear();
   mu_matchDzPvPackedIdx_.clear();
   mu_matchDzAssocPackedIdx_.clear();
   mu_matchPointerPackedIdx_.clear();
-  mu_nPassLegacyBox_.clear();
   mu_nPassVector_.clear();
   mu_nPassChi2_.clear();
   mu_nPassDzPv_.clear();
@@ -590,6 +617,8 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
           ? &vertices->at(selectedPVIndex_)
           : nullptr;
 
+  nPV_ = (vertices.isValid()) ? static_cast<int>(vertices->size()) : 0;
+
   // Store either the full PV collection or only the selected PV, depending on configuration.
   if (vertices.isValid()) {
     if (storeAllPrimaryVertices_) {
@@ -621,14 +650,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       pv_isValid_.push_back((!selectedPV->isFake() && selectedPV->ndof() > 0.) ? 1 : 0);
     }
   }
-  nPV_ = static_cast<int>(pv_x_.size());
-
-  // The legacy comparator consumes candidates sequentially, so keep a shared availability list.
-  std::vector<int> legacyAvailable;
-  legacyAvailable.reserve(packedCands->size());
-  for (size_t i = 0; i < packedCands->size(); ++i) {
-    legacyAvailable.push_back(static_cast<int>(i));
-  }
+  nPVStored_ = static_cast<int>(pv_x_.size());
 
   for (size_t muIdx = 0; muIdx < muons->size(); ++muIdx) {
     const auto &muon = muons->at(muIdx);
@@ -656,9 +678,10 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     const int passedMvaIDwpMedium = muon.passed(reco::Muon::MvaIDwpMedium) ? 1 : 0;
     const int passedMvaIDwpTight = muon.passed(reco::Muon::MvaIDwpTight) ? 1 : 0;
     const bool debugSoftMuon = debugUnmatchedSoftMuons_ && storePointerDiagnostics_ && (passedCutBasedIdSoft == 1);
+    const bool selectedPvMethodAvailable = (selectedPV != nullptr && muHasTrack && muTrackKin.dzErr > 0.f);
 
     const float muDzSelectedPV =
-        (selectedPV != nullptr && muHasTrack && std::isfinite(muTrackKin.dzErr))
+        (selectedPvMethodAvailable)
             ? ((trackSource == 1) ? muon.track()->dz(selectedPV->position()) : muon.muonBestTrack()->dz(selectedPV->position()))
             : kInvalidFloat;
     const float muDxySelectedPV =
@@ -671,18 +694,20 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
                            ? edm::refToPtr(muon.pfCandidateRef())
                            : reco::CandidatePtr();
 
-    std::vector<LocalCandidateStudy> retainedRows;
-    retainedRows.reserve(16);
+    std::vector<LocalCandidateStudy> candidateStudies;
+    candidateStudies.reserve(packedCands->size());
     std::vector<DebugCandidateRank> debugRanks;
     if (debugSoftMuon) {
       debugRanks.reserve(packedCands->size());
     }
 
-    int nPassLegacyBox = 0;
     int nPassVector = 0;
     int nPassChi2 = 0;
     int nPassDzPv = 0;
     int nPassDzAssoc = 0;
+    bool dzAssocMethodAvailable = false;
+    std::set<int> anyKinematicPassing;
+    std::set<int> anyCriterionPassing;
 
     int bestVectorIdx = kInvalidInt;
     double bestVectorValue = std::numeric_limits<double>::infinity();
@@ -692,6 +717,10 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     double bestDzPvValue = std::numeric_limits<double>::infinity();
     int bestDzAssocIdx = kInvalidInt;
     double bestDzAssocValue = std::numeric_limits<double>::infinity();
+    double rawBestVectorValue = std::numeric_limits<double>::infinity();
+    double rawBestChi2Value = std::numeric_limits<double>::infinity();
+    double rawBestDzPvValue = std::numeric_limits<double>::infinity();
+    double rawBestDzAssocValue = std::numeric_limits<double>::infinity();
 
     // Compare this muon with every packed candidate under all matching views.
     for (size_t packedIdx = 0; packedIdx < packedCands->size(); ++packedIdx) {
@@ -720,12 +749,14 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
 
       MatchMetrics metrics;
       const bool chargePass = (!requireChargeMatch_ || cand.charge() == muon.charge());
-      const bool legacyChargePass = (cand.charge() == muon.charge());
       if (muMomentum > 0.) {
         const double dpx = cand.px() - muon.px();
         const double dpy = cand.py() - muon.py();
         const double dpz = cand.pz() - muon.pz();
         metrics.deltaPRelVec = std::sqrt(dpx * dpx + dpy * dpy + dpz * dpz) / muMomentum;
+        if (chargePass && metrics.deltaPRelVec >= 0.f && metrics.deltaPRelVec < rawBestVectorValue) {
+          rawBestVectorValue = metrics.deltaPRelVec;
+        }
       }
 
       if (debugSoftMuon) {
@@ -746,18 +777,11 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         debugRanks.push_back(rank);
       }
 
-      // Reproduce the legacy first-match box comparator currently used in MultiLepPAT.
-      if (muMomentum > 0. && muon.track().isNonnull() && legacyChargePass &&
-          std::abs(cand.px() - muon.px()) < legacyBoxThreshold_ * muMomentum &&
-          std::abs(cand.py() - muon.py()) < legacyBoxThreshold_ * muMomentum &&
-          std::abs(cand.pz() - muon.pz()) < legacyBoxThreshold_ * muMomentum) {
-        metrics.legacyBoxPass = 1;
-        ++nPassLegacyBox;
-      }
-
       if (chargePass && metrics.deltaPRelVec >= 0.f && metrics.deltaPRelVec < vectorRelPThreshold_) {
         metrics.vectorPass = 1;
         ++nPassVector;
+        anyKinematicPassing.insert(static_cast<int>(packedIdx));
+        anyCriterionPassing.insert(static_cast<int>(packedIdx));
         if (metrics.deltaPRelVec < bestVectorValue) {
           bestVectorValue = metrics.deltaPRelVec;
           bestVectorIdx = static_cast<int>(packedIdx);
@@ -770,9 +794,14 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         const double dpz = cand.pz() - muon.pz();
         metrics.chi2MomentumDiag =
             dpx * dpx / sqr(muTrackKin.pxErr) + dpy * dpy / sqr(muTrackKin.pyErr) + dpz * dpz / sqr(muTrackKin.pzErr);
+        if (metrics.chi2MomentumDiag < rawBestChi2Value) {
+          rawBestChi2Value = metrics.chi2MomentumDiag;
+        }
         if (metrics.chi2MomentumDiag < momentumChi2Threshold_) {
           metrics.chi2Pass = 1;
           ++nPassChi2;
+          anyKinematicPassing.insert(static_cast<int>(packedIdx));
+          anyCriterionPassing.insert(static_cast<int>(packedIdx));
           if (metrics.chi2MomentumDiag < bestChi2Value) {
             bestChi2Value = metrics.chi2MomentumDiag;
             bestChi2Idx = static_cast<int>(packedIdx);
@@ -780,17 +809,21 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         }
       }
 
-      const bool selectedPvAvailable = (selectedPV != nullptr && muHasTrack && muTrackKin.dzErr > 0.f);
-      if (selectedPvAvailable) {
+      if (selectedPvMethodAvailable) {
         try {
           const double candDzSelectedPV = cand.dz(selectedPV->position());
           metrics.deltaDzSelectedPV = std::abs(candDzSelectedPV - muDzSelectedPV);
           if (metrics.chi2MomentumDiag >= 0.f) {
             metrics.chi2MomentumDzSelectedPV =
                 metrics.chi2MomentumDiag + sqr(metrics.deltaDzSelectedPV / muTrackKin.dzErr);
+            if (metrics.chi2MomentumDzSelectedPV < rawBestDzPvValue) {
+              rawBestDzPvValue = metrics.chi2MomentumDzSelectedPV;
+            }
             if (chargePass && metrics.chi2MomentumDzSelectedPV < momentumDzPvChi2Threshold_) {
               metrics.dzPvPass = 1;
               ++nPassDzPv;
+              anyKinematicPassing.insert(static_cast<int>(packedIdx));
+              anyCriterionPassing.insert(static_cast<int>(packedIdx));
               if (metrics.chi2MomentumDzSelectedPV < bestDzPvValue) {
                 bestDzPvValue = metrics.chi2MomentumDzSelectedPV;
                 bestDzPvIdx = static_cast<int>(packedIdx);
@@ -805,6 +838,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       const bool assocPvAvailable = (vertexRef.isNonnull() && vertices.isValid() &&
                                      vertexRef.key() < vertices->size() && muHasTrack && muTrackKin.dzErr > 0.f);
       if (assocPvAvailable) {
+        dzAssocMethodAvailable = true;
         try {
           const auto &assocPV = vertices->at(vertexRef.key());
           const double muDzAssocPV = (trackSource == 1) ? muon.track()->dz(assocPV.position())
@@ -813,9 +847,14 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
           if (metrics.chi2MomentumDiag >= 0.f) {
             metrics.chi2MomentumDzAssocPV =
                 metrics.chi2MomentumDiag + sqr(metrics.deltaDzAssocPV / muTrackKin.dzErr);
+            if (metrics.chi2MomentumDzAssocPV < rawBestDzAssocValue) {
+              rawBestDzAssocValue = metrics.chi2MomentumDzAssocPV;
+            }
             if (chargePass && metrics.chi2MomentumDzAssocPV < momentumDzAssocChi2Threshold_) {
               metrics.dzAssocPass = 1;
               ++nPassDzAssoc;
+              anyKinematicPassing.insert(static_cast<int>(packedIdx));
+              anyCriterionPassing.insert(static_cast<int>(packedIdx));
               if (metrics.chi2MomentumDzAssocPV < bestDzAssocValue) {
                 bestDzAssocValue = metrics.chi2MomentumDzAssocPV;
                 bestDzAssocIdx = static_cast<int>(packedIdx);
@@ -826,18 +865,18 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
         }
       }
 
-      // Keep rows that pass at least one metric view or resolve via PAT pointers.
-      if (metrics.legacyBoxPass || metrics.vectorPass || metrics.chi2Pass || metrics.dzPvPass ||
-          metrics.dzAssocPass || pointerMatchSource || pointerMatchPfRef) {
-        LocalCandidateStudy study;
-        study.packedIndex = static_cast<int>(packedIdx);
-        study.pointerMatchSource = pointerMatchSource;
-        study.pointerMatchPfRef = pointerMatchPfRef;
-        study.pointerMatchAny = (pointerMatchSource || pointerMatchPfRef) ? 1 : 0;
-        study.trackKin = extractPackedTrackKinematics(cand);
-        study.metrics = metrics;
-        retainedRows.push_back(study);
+      if (pointerMatchSource || pointerMatchPfRef) {
+        anyCriterionPassing.insert(static_cast<int>(packedIdx));
       }
+
+      LocalCandidateStudy study;
+      study.packedIndex = static_cast<int>(packedIdx);
+      study.pointerMatchSource = pointerMatchSource;
+      study.pointerMatchPfRef = pointerMatchPfRef;
+      study.pointerMatchAny = (pointerMatchSource || pointerMatchPfRef) ? 1 : 0;
+      study.trackKin = extractPackedTrackKinematics(cand);
+      study.metrics = metrics;
+      candidateStudies.push_back(study);
     }
 
     pointerSummary.sourceCandidateResolvedCount = static_cast<int>(pointerSummary.sourceMatches.size());
@@ -993,21 +1032,134 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       }
     }
 
-    // Final legacy assignment is sequential and consumes candidates globally across muons.
-    int legacyWinnerIdx = kInvalidInt;
-    if (muon.track().isNonnull()) {
-      for (auto availIt = legacyAvailable.begin(); availIt != legacyAvailable.end(); ++availIt) {
-        const auto &cand = packedCands->at(*availIt);
-        if (cand.charge() != muon.charge()) {
+    const int pointerWinnerIdx = (pointerSummary.pointerResolvedCount == 1) ? pointerSummary.firstPointerPackedIdx : kInvalidInt;
+    const bool pointerMethodConsidered = storePointerDiagnostics_;
+    const bool vectorMethodConsidered = (muMomentum > 0.);
+    const bool chi2MethodConsidered = muTrackKin.hasTrackErrors;
+    const bool dzPvMethodConsidered = selectedPvMethodAvailable;
+    const bool dzAssocMethodConsidered = dzAssocMethodAvailable;
+    const bool hasInternalMethodAmbiguity = (pointerSummary.pointerMultiplicityAnomaly != 0);
+
+    int nMethodsConsidered = 0;
+    int nMethodsMatched = 0;
+    std::set<int> distinctMatchedPackedIdx;
+    const auto recordMethodOutcome = [&](bool considered, int packedIdx) {
+      if (!considered) {
+        return;
+      }
+      ++nMethodsConsidered;
+      if (packedIdx != kInvalidInt) {
+        ++nMethodsMatched;
+        distinctMatchedPackedIdx.insert(packedIdx);
+      }
+    };
+
+    recordMethodOutcome(pointerMethodConsidered, pointerWinnerIdx);
+    recordMethodOutcome(vectorMethodConsidered, bestVectorIdx);
+    recordMethodOutcome(chi2MethodConsidered, bestChi2Idx);
+    recordMethodOutcome(dzPvMethodConsidered, bestDzPvIdx);
+    recordMethodOutcome(dzAssocMethodConsidered, bestDzAssocIdx);
+
+    const bool hasAnyMethodMatch = (nMethodsMatched > 0);
+    const bool isAgreementOnMatch =
+        (!hasInternalMethodAmbiguity && nMethodsConsidered > 0 && nMethodsMatched == nMethodsConsidered &&
+         distinctMatchedPackedIdx.size() == 1);
+    const bool isAgreementOnMismatch =
+        (!hasInternalMethodAmbiguity && nMethodsConsidered > 0 && nMethodsMatched == 0);
+    const bool hasMethodDisagreement =
+        (hasInternalMethodAmbiguity || (nMethodsConsidered > 0 && !isAgreementOnMatch && !isAgreementOnMismatch));
+
+    std::set<int> winnerPackedIdxs;
+    const auto addWinner = [&](int packedIdx) {
+      if (packedIdx != kInvalidInt) {
+        winnerPackedIdxs.insert(packedIdx);
+      }
+    };
+    addWinner(bestVectorIdx);
+    addWinner(bestChi2Idx);
+    addWinner(bestDzPvIdx);
+    addWinner(bestDzAssocIdx);
+    addWinner(pointerWinnerIdx);
+
+    std::set<int> retainedPackedIdxs;
+    const auto retainUnionOfPassers = [&]() {
+      for (const auto &study : candidateStudies) {
+        if (study.metrics.vectorPass || study.metrics.chi2Pass || study.metrics.dzPvPass || study.metrics.dzAssocPass ||
+            study.pointerMatchAny) {
+          retainedPackedIdxs.insert(study.packedIndex);
+        }
+      }
+    };
+    const auto retainPointerResolved = [&]() {
+      for (int packedIdx : pointerSummary.allMatches) {
+        retainedPackedIdxs.insert(packedIdx);
+      }
+    };
+    const auto addTopLosersForMethod = [&](bool methodConsidered, const auto &scoreGetter) {
+      if (!methodConsidered || loserRowsPerMethod_ <= 0) {
+        return;
+      }
+
+      std::vector<std::pair<double, int>> rankedLosers;
+      rankedLosers.reserve(candidateStudies.size());
+      for (const auto &study : candidateStudies) {
+        if (winnerPackedIdxs.count(study.packedIndex) != 0) {
           continue;
         }
-        if (muMomentum > 0. && std::abs(cand.px() - muon.px()) < legacyBoxThreshold_ * muMomentum &&
-            std::abs(cand.py() - muon.py()) < legacyBoxThreshold_ * muMomentum &&
-            std::abs(cand.pz() - muon.pz()) < legacyBoxThreshold_ * muMomentum) {
-          legacyWinnerIdx = *availIt;
-          legacyAvailable.erase(availIt);
+        const double score = scoreGetter(study);
+        if (!std::isfinite(score) || score < 0.) {
+          continue;
+        }
+        rankedLosers.emplace_back(score, study.packedIndex);
+      }
+
+      std::sort(rankedLosers.begin(), rankedLosers.end(), [](const auto &lhs, const auto &rhs) {
+        if (lhs.first != rhs.first) {
+          return lhs.first < rhs.first;
+        }
+        return lhs.second < rhs.second;
+      });
+
+      int kept = 0;
+      for (const auto &[score, packedIdx] : rankedLosers) {
+        (void)score;
+        retainedPackedIdxs.insert(packedIdx);
+        ++kept;
+        if (kept >= loserRowsPerMethod_) {
           break;
         }
+      }
+    };
+
+    if (!storeDetailedRowsOnlyOnDisagreement_) {
+      retainUnionOfPassers();
+    } else if (hasMethodDisagreement) {
+      if (disagreementRowMode_ == "winnersPlusPerMethodLosers") {
+        retainedPackedIdxs = winnerPackedIdxs;
+        retainPointerResolved();
+
+        addTopLosersForMethod(vectorMethodConsidered, [&](const LocalCandidateStudy &study) {
+          const auto &cand = packedCands->at(study.packedIndex);
+          const bool chargePass = (!requireChargeMatch_ || cand.charge() == muon.charge());
+          return (chargePass && study.metrics.deltaPRelVec >= 0.f) ? static_cast<double>(study.metrics.deltaPRelVec)
+                                                                   : std::numeric_limits<double>::infinity();
+        });
+        addTopLosersForMethod(chi2MethodConsidered, [&](const LocalCandidateStudy &study) {
+          return (study.metrics.chi2MomentumDiag >= 0.f) ? static_cast<double>(study.metrics.chi2MomentumDiag)
+                                                         : std::numeric_limits<double>::infinity();
+        });
+        addTopLosersForMethod(dzPvMethodConsidered, [&](const LocalCandidateStudy &study) {
+          return (study.metrics.chi2MomentumDzSelectedPV >= 0.f)
+                     ? static_cast<double>(study.metrics.chi2MomentumDzSelectedPV)
+                     : std::numeric_limits<double>::infinity();
+        });
+        addTopLosersForMethod(dzAssocMethodConsidered, [&](const LocalCandidateStudy &study) {
+          return (study.metrics.chi2MomentumDzAssocPV >= 0.f)
+                     ? static_cast<double>(study.metrics.chi2MomentumDzAssocPV)
+                     : std::numeric_limits<double>::infinity();
+        });
+      } else {
+        retainUnionOfPassers();
       }
     }
 
@@ -1050,21 +1202,41 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
     mu_sourceCandidateResolvedCount_.push_back(pointerSummary.sourceCandidateResolvedCount);
     mu_pointerResolvedCount_.push_back(pointerSummary.pointerResolvedCount);
     mu_pointerMultiplicityAnomaly_.push_back(pointerSummary.pointerMultiplicityAnomaly);
-    mu_matchLegacyPackedIdx_.push_back(legacyWinnerIdx);
+    mu_nMethodsConsidered_.push_back(nMethodsConsidered);
+    mu_nMethodsMatched_.push_back(nMethodsMatched);
+    mu_nDistinctMatchedPackedIdx_.push_back(static_cast<int>(distinctMatchedPackedIdx.size()));
+    mu_hasAnyMethodMatch_.push_back(hasAnyMethodMatch ? 1 : 0);
+    mu_isAgreementOnMatch_.push_back(isAgreementOnMatch ? 1 : 0);
+    mu_isAgreementOnMismatch_.push_back(isAgreementOnMismatch ? 1 : 0);
+    mu_hasMethodDisagreement_.push_back(hasMethodDisagreement ? 1 : 0);
+    mu_nPackedPassingAnyKinematic_.push_back(static_cast<int>(anyKinematicPassing.size()));
+    mu_nPackedPointerResolved_.push_back(pointerSummary.pointerResolvedCount);
+    mu_nPackedPassingAnyCriterion_.push_back(static_cast<int>(anyCriterionPassing.size()));
+    mu_bestVectorRelP_.push_back(std::isfinite(rawBestVectorValue) ? static_cast<float>(rawBestVectorValue) : kInvalidFloat);
+    mu_bestMomentumChi2_.push_back(std::isfinite(rawBestChi2Value) ? static_cast<float>(rawBestChi2Value) : kInvalidFloat);
+    mu_bestMomentumDzPvChi2_.push_back(std::isfinite(rawBestDzPvValue) ? static_cast<float>(rawBestDzPvValue)
+                                                                       : kInvalidFloat);
+    mu_bestMomentumDzAssocChi2_.push_back(std::isfinite(rawBestDzAssocValue) ? static_cast<float>(rawBestDzAssocValue)
+                                                                             : kInvalidFloat);
     mu_matchVectorPackedIdx_.push_back(bestVectorIdx);
     mu_matchChi2PackedIdx_.push_back(bestChi2Idx);
     mu_matchDzPvPackedIdx_.push_back(bestDzPvIdx);
     mu_matchDzAssocPackedIdx_.push_back(bestDzAssocIdx);
-    mu_matchPointerPackedIdx_.push_back(pointerSummary.firstPointerPackedIdx);
-    mu_nPassLegacyBox_.push_back(nPassLegacyBox);
+    mu_matchPointerPackedIdx_.push_back(pointerWinnerIdx);
     mu_nPassVector_.push_back(nPassVector);
     mu_nPassChi2_.push_back(nPassChi2);
     mu_nPassDzPv_.push_back(nPassDzPv);
     mu_nPassDzAssoc_.push_back(nPassDzAssoc);
     ++nMuStored_;
 
+    const bool shouldStoreDetailedRows = (!storeDetailedRowsOnlyOnDisagreement_ || hasMethodDisagreement);
+    if (!shouldStoreDetailedRows) {
+      continue;
+    }
+
     // Fill one candidate-tree row for each retained `(muon, packed candidate)` comparison.
-    for (const auto &retained : retainedRows) {
+    for (int retainedPackedIdx : retainedPackedIdxs) {
+      const auto &retained = candidateStudies.at(retainedPackedIdx);
       const auto &cand = packedCands->at(retained.packedIndex);
       cand_run_ = run_;
       cand_lumi_ = lumi_;
@@ -1121,12 +1293,10 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       cand_deltaDzAssocPV_ = retained.metrics.deltaDzAssocPV;
       cand_chi2MomentumDzSelectedPV_ = retained.metrics.chi2MomentumDzSelectedPV;
       cand_chi2MomentumDzAssocPV_ = retained.metrics.chi2MomentumDzAssocPV;
-      cand_legacyBoxPass_ = retained.metrics.legacyBoxPass;
       cand_vectorPass_ = retained.metrics.vectorPass;
       cand_chi2Pass_ = retained.metrics.chi2Pass;
       cand_dzPvPass_ = retained.metrics.dzPvPass;
       cand_dzAssocPass_ = retained.metrics.dzAssocPass;
-      cand_finalLegacy_ = (retained.packedIndex == legacyWinnerIdx) ? 1 : 0;
       cand_finalVector_ = (retained.packedIndex == bestVectorIdx) ? 1 : 0;
       cand_finalChi2_ = (retained.packedIndex == bestChi2Idx) ? 1 : 0;
       cand_finalDzPv_ = (retained.packedIndex == bestDzPvIdx) ? 1 : 0;
@@ -1134,7 +1304,7 @@ void MuonPackedCandMatchNtuplizer::analyze(const edm::Event &iEvent, const edm::
       cand_pointerMatchAny_ = retained.pointerMatchAny;
       cand_pointerMatchSource_ = retained.pointerMatchSource;
       cand_pointerMatchPfRef_ = retained.pointerMatchPfRef;
-      cand_finalPointer_ = retained.pointerMatchAny;
+      cand_finalPointer_ = (retained.packedIndex == pointerWinnerIdx) ? 1 : 0;
       candidateTree_->Fill();
     }
   }

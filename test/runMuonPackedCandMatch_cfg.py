@@ -48,6 +48,27 @@ ivars.register(
     mytype=VarParsing.VarParsing.varType.bool,
     info='Print stdout debug for SoftCutBasedId muons with zero pointer matches'
 )
+ivars.register(
+    'storeDetailedRowsOnlyOnDisagreement',
+    default=True,
+    mult=VarParsing.VarParsing.multiplicity.singleton,
+    mytype=VarParsing.VarParsing.varType.bool,
+    info='Store MuonCandMatch rows only for muons where the enabled methods disagree'
+)
+ivars.register(
+    'loserRowsPerMethod',
+    default=3,
+    mult=VarParsing.VarParsing.multiplicity.singleton,
+    mytype=VarParsing.VarParsing.varType.int,
+    info='Maximum number of non-winning loser rows to keep per considered kinematic method'
+)
+ivars.register(
+    'disagreementRowMode',
+    default='winnersPlusPerMethodLosers',
+    mult=VarParsing.VarParsing.multiplicity.singleton,
+    mytype=VarParsing.VarParsing.varType.string,
+    info='Detailed-row retention mode for disagreement muons'
+)
 
 # --- Default input/output values for local testing ---
 ivars.inputFiles = ('/store/data/Run2023D/ParkingDoubleMuonLowMass0/MINIAOD/PromptReco-v1/000/369/873/00000/33e0e861-ddbc-4afe-a76b-31be5057dff1.root',)
@@ -136,17 +157,19 @@ process.muonPackedCandMatch = cms.EDAnalyzer(
     packedCandidates=cms.untracked.InputTag('packedPFCandidates'),
     primaryVertices=cms.untracked.InputTag('offlineSlimmedPrimaryVertices'),
 
-    # Runtime selection and matching thresholds mirrored in the technical docs.
+    # Runtime selection, compact-mode row retention, and matching thresholds mirrored in the technical docs.
     studyAllMuons=cms.untracked.bool(ivars.studyAllMuons),
+    StoreDetailedRowsOnlyOnDisagreement=cms.untracked.bool(ivars.storeDetailedRowsOnlyOnDisagreement),
+    LoserRowsPerMethod=cms.untracked.int32(ivars.loserRowsPerMethod),
+    DisagreementRowMode=cms.untracked.string(ivars.disagreementRowMode),
     MuonSelection=cms.untracked.string('pt > 2.5 && abs(eta) < 2.4'),
     PVSelectionMode=cms.untracked.string('firstVertex'),
-    LegacyBoxThreshold=cms.untracked.double(0.05),
     VectorRelPThreshold=cms.untracked.double(0.01),
     MomentumChi2Threshold=cms.untracked.double(25.0),
     MomentumDzPvChi2Threshold=cms.untracked.double(25.0),
     MomentumDzAssocChi2Threshold=cms.untracked.double(25.0),
     RequireChargeMatch=cms.untracked.bool(True),
-    StoreAllPrimaryVertices=cms.untracked.bool(True),
+    StoreAllPrimaryVertices=cms.untracked.bool(False),
     StorePointerDiagnostics=cms.untracked.bool(True),
     DebugUnmatchedSoftMuons=cms.untracked.bool(ivars.debugUnmatchedSoftMuons),
 )
